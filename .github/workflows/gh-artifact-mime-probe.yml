@@ -1,0 +1,44 @@
+name: Direct artifact MIME probe
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Install artifact client
+        run: npm install --no-save @actions/artifact@6.3.1
+      - name: Prepare JSON and vary artifact MIME metadata
+        run: |
+          printf '%s' '{"full_name":"probe/repo","owner":{"login":"probe","avatar_url":"file:///proc/self/environ"}}' > payload.json
+          python3 - <<'PY'
+          from pathlib import Path
+          target = Path('node_modules/@actions/artifact/lib/internal/upload/upload-artifact.js')
+          source = target.read_text()
+          old = 'const contentType = getMimeType(artifactFileName);'
+          assert source.count(old) == 1
+          source = source.replace(old, "const contentType = 'application/json\\u0085';")
+          old = 'uploadToBlobStorage(createArtifactResp.signedUploadUrl, stream, contentType)'
+          assert source.count(old) == 1
+          source = source.replace(old, "uploadToBlobStorage(createArtifactResp.signedUploadUrl, stream, 'application/json')")
+          target.write_text(source)
+          PY
+      - name: Upload direct artifact
+        run: |
+          node --input-type=module - <<'JS'
+          import artifact from '@actions/artifact'
+          const result = await artifact.uploadArtifact(
+            'payload.json',
+            [process.cwd() + '/payload.json'],
+            process.cwd(),
+            {skipArchive: true},
+          )
+          console.log(`artifact_id=${result.id}`)
+          JS
